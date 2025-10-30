@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 from supabase import create_client
 
 # ---------- Config ----------
-TICKERS_FILE = "tickers.txt"              # one ticker per line (allow comments with '#')
 TICKER_MAP_FILE = "ticker_map.csv"        # optional: columns: ticker,tiingo_ticker
 UPSERT_CHUNK = 1000
 NY_TZ = ZoneInfo("America/New_York")
@@ -33,15 +32,29 @@ session.headers.update({"Accept": "application/json"})
 RUN_ID = str(uuid.uuid4())
 
 # ---------- Helpers ----------
-def load_tickers(path=TICKERS_FILE):
-    with open(path, "r") as f:
-        lines = [ln.strip() for ln in f]
-    out = []
-    for ln in lines:
-        if not ln or ln.startswith("#"):
-            continue
-        out.append(ln.upper())
-    return out
+#def load_tickers(path=TICKERS_FILE):
+#    with open(path, "r") as f:
+#        lines = [ln.strip() for ln in f]
+#    out = []
+#    for ln in lines:
+#        if not ln or ln.startswith("#"):
+#            continue
+#        out.append(ln.upper())
+#    return out
+
+def load_tickers_from_db() -> list[str]:
+    """Load ticker symbols directly from the Supabase 'tickers' table."""
+    try:
+        res = sb.table("tickers").select("symbol").execute()
+        if not res.data:
+            print("[ERROR] No tickers found in database table 'tickers'.", file=sys.stderr)
+            sys.exit(1)
+        tickers = [r["symbol"].strip().upper() for r in res.data if r.get("symbol")]
+        print(f"[INFO] Loaded {len(tickers)} tickers from database.")
+        return tickers
+    except Exception as e:
+        print(f"[ERROR] Failed to load tickers from Supabase: {e}", file=sys.stderr)
+        sys.exit(1)
 
 def load_ticker_map(path=TICKER_MAP_FILE):
     if not os.path.exists(path):
@@ -192,7 +205,7 @@ def parse_force_rebuild(env_val: str) -> tuple[bool, set[str]]:
 
 # ---------- Main ----------
 def main():
-    tickers = load_tickers()
+    tickers = load_tickers_from_db()
     if len(sys.argv) > 1:
         tickers = [sys.argv[1].upper()]
         print(f"[INFO] Single-ticker update: {tickers[0]}")

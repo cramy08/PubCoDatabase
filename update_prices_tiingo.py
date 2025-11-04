@@ -43,33 +43,38 @@ RUN_ID = str(uuid.uuid4())
 #    return out
 
 def load_tickers_from_db() -> list[str]:
-    """Load ticker symbols directly from the Supabase 'tickers' table."""
+    """
+    Load ticker symbols from the Supabase 'instruments' table.
+    Uses vendor_symbol when available, otherwise ticker.
+    Only pulls active, non-delisted instruments.
+    """
     try:
-        res = sb.table("tickers").select("symbol").execute()
+        res = (
+            sb.table("instruments")
+              .select("ticker,vendor_symbol,is_active,is_delisted")
+              .eq("is_active", True)
+              .or_("is_delisted.is.null,is_delisted.eq.false")
+              .execute()
+        )
         if not res.data:
-            print("[ERROR] No tickers found in database table 'tickers'.", file=sys.stderr)
+            print("[ERROR] No active instruments found in 'instruments' table.", file=sys.stderr)
             sys.exit(1)
-        tickers = [r["symbol"].strip().upper() for r in res.data if r.get("symbol")]
-        print(f"[INFO] Loaded {len(tickers)} tickers from database.")
+
+        tickers = []
+        for r in res.data:
+            vend = (r.get("vendor_symbol") or r.get("ticker") or "").strip().upper()
+            if vend:
+                tickers.append(vend)
+        print(f"[INFO] Loaded {len(tickers)} active instruments from Supabase.")
         return tickers
+
     except Exception as e:
-        print(f"[ERROR] Failed to load tickers from Supabase: {e}", file=sys.stderr)
+        print(f"[ERROR] Failed to load instruments from Supabase: {e}", file=sys.stderr)
         sys.exit(1)
 
-def load_ticker_map(path=TICKER_MAP_FILE):
-    if not os.path.exists(path):
-        return {}
-    df = pd.read_csv(path)
-    df.columns = [c.strip().lower() for c in df.columns]
-    mp = {}
-    for _, row in df.iterrows():
-        mp[str(row["ticker"]).upper()] = str(row["tiingo_ticker"]).strip()
-    return mp
-
-TICKER_MAP = load_ticker_map()
-
 def vendor_symbol(ticker: str) -> str:
-    return TICKER_MAP.get(ticker.upper(), ticker.upper())
+    # Simplified: no mapping file needed
+    return ticker.upper()
 
 def json_rows(df: pd.DataFrame) -> list:
     return json.loads(df.to_json(orient="records"))

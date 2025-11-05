@@ -42,11 +42,10 @@ RUN_ID = str(uuid.uuid4())
 #        out.append(ln.upper())
 #    return out
 
-def load_tickers_from_db() -> list[str]:
+def load_tickers_from_db() -> dict[str, str]:
     """
-    Load ticker symbols from the Supabase 'instruments' table.
+    Returns {ticker: vendor_symbol} from Supabase.
     Uses vendor_symbol when available, otherwise ticker.
-    Only pulls should update, non-delisted instruments.
     """
     try:
         res = (
@@ -56,25 +55,23 @@ def load_tickers_from_db() -> list[str]:
               .or_("is_delisted.is.null,is_delisted.eq.false")
               .execute()
         )
+
         if not res.data:
             print("[ERROR] No update instruments found in 'instruments' table.", file=sys.stderr)
             sys.exit(1)
 
-        tickers = []
+        ticker_map = {}
         for r in res.data:
-            vend = (r.get("vendor_symbol") or r.get("ticker") or "").strip().upper()
-            if vend:
-                tickers.append(vend)
-        print(f"[INFO] Loaded {len(tickers)} should update instruments from Supabase.")
-        return tickers
+            ticker = (r.get("ticker") or "").strip().upper()
+            vend = (r.get("vendor_symbol") or ticker).strip().upper()
+            if ticker:
+                ticker_map[ticker] = vend
+        print(f"[INFO] Loaded {len(ticker_map)} instruments from Supabase.")
+        return ticker_map
 
     except Exception as e:
         print(f"[ERROR] Failed to load instruments from Supabase: {e}", file=sys.stderr)
         sys.exit(1)
-
-def vendor_symbol(ticker: str) -> str:
-    # Simplified: no mapping file needed
-    return ticker.upper()
 
 def json_rows(df: pd.DataFrame) -> list:
     return json.loads(df.to_json(orient="records"))
@@ -125,8 +122,7 @@ def _tiingo_get(url: str, params: dict, max_retries=5) -> requests.Response:
     r.raise_for_status()
     return r
 
-def fetch_tiingo_range(ticker: str, start: dt.date, end_exclusive: dt.date) -> pd.DataFrame:
-    vend = vendor_symbol(ticker)
+def fetch_tiingo_range(ticker: str, vend: str, start: dt.date, end_exclusive: dt.date) -> pd.DataFrame:
     end_inclusive = (end_exclusive - dt.timedelta(days=1)).strftime("%Y-%m-%d")
     url = f"https://api.tiingo.com/tiingo/daily/{vend}/prices"
     params = {
@@ -143,8 +139,7 @@ def fetch_tiingo_range(ticker: str, start: dt.date, end_exclusive: dt.date) -> p
     df = pd.DataFrame(r.json())
     return normalize_prices_df(df, ticker, "tiingo")
 
-def fetch_tiingo_max(ticker: str) -> pd.DataFrame:
-    vend = vendor_symbol(ticker)
+def fetch_tiingo_max(ticker: str, vend: str) -> pd.DataFrame:
     today_ny = dt.datetime.now(NY_TZ).date()
     url = f"https://api.tiingo.com/tiingo/daily/{vend}/prices"
     params = {
@@ -154,6 +149,7 @@ def fetch_tiingo_max(ticker: str) -> pd.DataFrame:
         "token": TIINGO_TOKEN,
     }
     r = _tiingo_get(url, params)
+
     if r.status_code == 404:
         print(f"[WARN] {ticker}: 404 from Tiingo (symbol not found?)")
         return pd.DataFrame()
@@ -208,12 +204,13 @@ def parse_force_rebuild(env_val: str) -> tuple[bool, set[str]]:
     syms = {s.strip().upper() for s in v.split(",") if s.strip()}
     return False, syms
 
-# ---------- Main ----------
+# ---------- Main Loop ----------
 def main():
-    tickers = load_tickers_from_db()
+    ticker_map = load_tickers_from_db()
+    tickers = list(ticker_map.keys())
     if len(sys.argv) > 1:
         tickers = [sys.argv[1].upper()]
-        print(f"[INFO] Single-ticker update: {tickers[0]}")
+        print(f"[DEBUG] Example mapping: {list(ticker_map.items())[:5]}")
 
     force_all, force_set = parse_force_rebuild(FORCE_REBUILD_ENV)
     today = dt.datetime.now(NY_TZ).date()
@@ -226,7 +223,8 @@ def main():
 
             if last is None or force:
                 # Full MAX backfill (first seen or forced rebuild)
-                df = fetch_tiingo_max(t)
+                print(f"[DEBUG] {t} → vendor symbol {ticker_map[t]}")
+                df = fetch_tiingo_max(t, ticker_map[t])
                 n = upsert_df(df)
                 log_ticker_result(t, "tiingo",
                                   fetch_start=dt.date(1900,1,1),
@@ -242,7 +240,7 @@ def main():
                     log_ticker_result(t, "tiingo", start, end_exclusive, 0, status="skip")
                     print(f"[SKIP] {t} already up to date (last={last})")
                     continue
-                df = fetch_tiingo_range(t, start, end_exclusive)
+                df = fetch_tiingo_range(t, ticker_map[t], start, end_exclusive)
                 n = upsert_df(df)
                 log_ticker_result(t, "tiingo", start, end_exclusive, n, status="ok")
                 print(f"[OK] {t}: upserted {n} rows from {start} to {today} (last was {last})")

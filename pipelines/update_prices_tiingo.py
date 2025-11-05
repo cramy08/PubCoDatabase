@@ -46,18 +46,18 @@ def load_tickers_from_db() -> list[str]:
     """
     Load ticker symbols from the Supabase 'instruments' table.
     Uses vendor_symbol when available, otherwise ticker.
-    Only pulls active, non-delisted instruments.
+    Only pulls should update, non-delisted instruments.
     """
     try:
         res = (
             sb.table("instruments")
               .select("ticker,vendor_symbol,is_active,is_delisted")
-              .eq("is_active", True)
+              .eq("should_update", True)
               .or_("is_delisted.is.null,is_delisted.eq.false")
               .execute()
         )
         if not res.data:
-            print("[ERROR] No active instruments found in 'instruments' table.", file=sys.stderr)
+            print("[ERROR] No update instruments found in 'instruments' table.", file=sys.stderr)
             sys.exit(1)
 
         tickers = []
@@ -65,7 +65,7 @@ def load_tickers_from_db() -> list[str]:
             vend = (r.get("vendor_symbol") or r.get("ticker") or "").strip().upper()
             if vend:
                 tickers.append(vend)
-        print(f"[INFO] Loaded {len(tickers)} active instruments from Supabase.")
+        print(f"[INFO] Loaded {len(tickers)} should update instruments from Supabase.")
         return tickers
 
     except Exception as e:

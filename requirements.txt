@@ -3,3 +3,6 @@ requests>=2.31
 python-dotenv>=1.0
 supabase>=2.4
 tzdata>=2024.1
+matplotlib
+openpyxl
+python-dotenv
